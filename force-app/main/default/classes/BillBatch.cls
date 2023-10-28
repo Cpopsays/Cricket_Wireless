@@ -9,7 +9,8 @@ public with sharing class BillBatch implements Database.Batchable<sObject>, Data
         //Hint: be sure to escape the single quotes surrounding \'Yes\' in your dynamic query!
         //query for the following fields:
         //Id, Bill_By_Email__c
-
+        String queryString = 'SELECT Id, name, Bill_By_Email__c FROM Account WHERE Active__c = \'Yes\' AND Bill_By_Email != null';
+        return Database.getQueryLocator(queryString);
 
     }
 
@@ -18,17 +19,27 @@ public with sharing class BillBatch implements Database.Batchable<sObject>, Data
         //a list of account Ids (this.receivesBillByEmail) to carry over to the finish method.
         //we will do this by iterating over scope and checking whether Bill_By_Email__c == TRUE.
         //This method will also call our BillAPI.getBills() method.
-
-
+        for(Account singleAccount : scope){
+            //check if Bill_By_Email__c is TRUE for the current account
+            if (singleAccount.Bill_By_Email__c == true){
+                //Add the ID to receivesBillByEmail
+                receivesBillByEmail.add(singleAccount.Id);
+                System.Debug('accountId: '+singleAccount.Id);
+            }        
+        }
+        //call the external method BillAPI.getBills() with the collected Account Ids
+    if (receivesBillByEmail.isEmpty()){    
+        BillAPI.getBills();
+    }
     }
 
     public void finish(Database.BatchableContext bc){
         //this is the final method of the class, that will be called after all processing in the
         //start and execute methods is complete. We will use this method to send an email to each
-        //customer in the receivesBillByEmail list. First, we must query for the recently created bills for
-        //each account with the following nested query:
+        //customer in the receivesBillByEmail list. 
+        //Query for the recently created bills for each account with the following nested query:
         //[SELECT Id, (SELECT Id FROM Bills__r ORDER BY CreatedDate DESC) FROM Account WHERE Id IN :this.receivesBillByEmail]
-
+        List<Account> accountsWithBills = [SELECT Id, Email__c, (SELECT Id FROM Bills__r ORDER BY CreatedDate DESC) FROM Account WHERE Id IN :this.receivesBillByEmail];
  
         
         //We will then iterate over the results of this query and associate the Id of the most recent bill (value) with the
@@ -36,7 +47,22 @@ public with sharing class BillBatch implements Database.Batchable<sObject>, Data
         //method of the Map class:
         //https://developer.salesforce.com/docs/atlas.en-us.apexref.meta/apexref/apex_methods_system_map.htm
         //we will also create a Map<Id, String> called emailMap, where we'll hold the Account Id (key) and account email (value).
+        
+        //Cpop: Followed Usharani's approach on this part
+        Map<Id,Id> billMap = new Map<Id,Id>(); //key is account Id and value is recent bill Id
+        Map<Id,String> emailMap = new Map<Id,String>(); //key is account id and value is account email 
+        
+        //iterate over the results
+        for (Account acc : accountsWithBills){
+            //check fer bills arrr matey
+            if(!acc.Bills__r.isEmpty()){
+                //associate the Id of the most recent bill to the corresponding Id of the account
+                billMap.put(acc.Id, acc.Bills__r[0].Id);
+                //associate the account Id with the Account Email 
+                emailMap.put(acc.Id, acc.Email__c);
+            }
 
+        }
 
 
         //Next, we are going to prepare to call our BillEmailer.sendEmails(Map<String, Blob> emailsWithBills)
@@ -48,11 +74,20 @@ public with sharing class BillBatch implements Database.Batchable<sObject>, Data
         //Blob pdfBlob = pageRef.getContentAsPDF();
         //hint: you'll need to use the .get() method of the Map class a couple of times here.
 
-
+        //initialize sendMap
+        Map<String,Blob> sendMap = new Map<String,Blob>(); //key is acct id and value is PDF
+        //Iterate over keyset for billmap
+        for(Id accountId : billMap.keySet()){
+            //generate a PDF for each billId
+            PageReference pageRef = new PageReference ('/apex/BillVFP?id=' + billMap.get(accountId));
+            Blob pdfBlob = pageRef.getContentAsPDF();
+            //put the email from the account in the key of the key-value pair
+            sendMap.put(emailMap.get(AccountId), pdfBlob);    
+        }
 
         //finally, we will call our BillEmailer.sendEmails(sendMap) method. Remember, this method is VOID,
         //so there will be no return value;
-
+        BillEmailer.sendEmails(sendMap);
 
     }
 }
